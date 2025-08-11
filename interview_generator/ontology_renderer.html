@@ -1,0 +1,225 @@
+!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skill Ontology Visualizer (Canvas)</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background-color: #f0f2f5;
+        }
+        #graph-container {
+            width: 100vw;
+            height: 100vh;
+            cursor: move;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
+        #upload-label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        #tooltip {
+            position: absolute;
+            visibility: hidden;
+            background: #333;
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <label id="upload-label" for="json-upload">Upload ontology.json:</label>
+        <input type="file" id="json-upload" accept=".json">
+    </div>
+    <div id="tooltip"></div>
+    <div id="graph-container">
+        <!-- Canvas will be appended here by D3 -->
+    </div>
+
+    <script>
+        document.getElementById('json-upload').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        renderGraph(data);
+                    } catch (error) {
+                        alert('Error parsing JSON file: ' + error.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        function renderGraph(data) {
+            // Clear previous graph if any
+            d3.select("#graph-container").select("canvas").remove();
+
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            const canvas = d3.select("#graph-container").append("canvas")
+                .attr("width", width)
+                .attr("height", height)
+                .node();
+
+            const context = canvas.getContext("2d");
+            const tooltip = d3.select("#tooltip");
+
+            // Create links from the parent_ids array
+            const links = [];
+            data.forEach(node => {
+                if (node.parent_ids) {
+                    node.parent_ids.forEach(parentId => {
+                        links.push({ source: node.id, target: parentId });
+                    });
+                }
+            });
+
+            const nodes = data;
+            const nodeById = new Map(nodes.map(d => [d.id, d]));
+
+            // D3 v7 requires source and target to be objects, not just IDs
+            links.forEach(link => {
+                link.source = nodeById.get(link.source);
+                link.target = nodeById.get(link.target);
+            });
+
+            const simulation = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links).id(d => d.id).distance(40).strength(0.5))
+                .force("charge", d3.forceManyBody().strength(-50))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .on("tick", ticked);
+
+            const color = d3.scaleOrdinal()
+                .domain(["ROOT", "INTERMEDIATE", "LEAF"])
+                .range(["#d6336c", "#ae3ec9", "#4263eb"]);
+            
+            let transform = d3.zoomIdentity;
+
+            function ticked() {
+                context.save();
+                context.clearRect(0, 0, width, height);
+                context.translate(transform.x, transform.y);
+                context.scale(transform.k, transform.k);
+
+                // Draw links
+                context.strokeStyle = "#aaa";
+                context.globalAlpha = 0.6;
+                context.beginPath();
+                links.forEach(d => {
+                    context.moveTo(d.source.x, d.source.y);
+                    context.lineTo(d.target.x, d.target.y);
+                });
+                context.stroke();
+                context.globalAlpha = 1.0;
+
+                // Draw nodes
+                nodes.forEach(d => {
+                    context.beginPath();
+                    context.moveTo(d.x + 5, d.y);
+                    const radius = d.type === 'ROOT' ? 10 : (d.type === 'INTERMEDIATE' ? 6 : 3);
+                    context.arc(d.x, d.y, radius, 0, 2 * Math.PI);
+                    context.fillStyle = color(d.type);
+                    context.fill();
+                });
+
+                // Draw labels for larger nodes only (for performance)
+                context.fillStyle = "#333";
+                context.font = "10px sans-serif";
+                context.textAlign = "center";
+                context.textBaseline = "middle";
+                nodes.forEach(d => {
+                    if (transform.k > 1.5 && (d.type === 'ROOT' || d.type === 'INTERMEDIATE')) {
+                         context.fillText(d.label, d.x, d.y - 12);
+                    }
+                });
+
+                context.restore();
+            }
+
+            // Drag and Zoom handlers
+            d3.select(canvas)
+                .call(d3.drag()
+                    .container(canvas)
+                    .subject(dragsubject)
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended))
+                .call(d3.zoom()
+                    .scaleExtent([0.1, 8])
+                    .on("zoom", zoomed));
+
+            function dragsubject(event) {
+                const [mx, my] = d3.pointer(event);
+                const inverted = transform.invert([mx, my]);
+                return simulation.find(inverted[0], inverted[1], 30 / transform.k);
+            }
+
+            function dragstarted(event) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                event.subject.fx = transform.invertX(event.x);
+                event.subject.fy = transform.invertY(event.y);
+            }
+
+            function dragged(event) {
+                event.subject.fx = transform.invertX(event.x);
+                event.subject.fy = transform.invertY(event.y);
+            }
+
+            function dragended(event) {
+                if (!event.active) simulation.alphaTarget(0);
+                event.subject.fx = null;
+                event.subject.fy = null;
+            }
+
+            function zoomed(event) {
+                transform = event.transform;
+                ticked();
+            }
+
+            // Tooltip on hover
+            d3.select(canvas).on("mousemove", function(event) {
+                const [mx, my] = d3.pointer(event);
+                const inverted = transform.invert([mx, my]);
+                const node = simulation.find(inverted[0], inverted[1], 30 / transform.k);
+                
+                if (node) {
+                    tooltip
+                        .style("visibility", "visible")
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY + 10) + "px")
+                        .text(node.label);
+                } else {
+                    tooltip.style("visibility", "hidden");
+                }
+            });
+        }
+    </script>
+</body>
+</html>
