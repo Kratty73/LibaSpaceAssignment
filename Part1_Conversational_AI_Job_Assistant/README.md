@@ -70,3 +70,6 @@ The primary bottleneck in the current system is **latency**, which is caused by 
 4.  **Persistent Session Management:**
     * **What:** Replace the in-memory `conversation_preferences` dictionary with a persistent store like **Redis** or a database.
     * **Why:** The current in-memory approach means all user history is lost if the server restarts. A persistent store is essential for a stateful, production-grade application, allowing for long-term user memory and a more robust user experience.
+
+5.  **Bugs:**
+    * **What:** The Presenting LLM call is currently failing to accurately filter relevant jobs, while the Ambiguity Flagging LLM is marking reasonable cases as ambiguous, making the system appear less intelligent.
